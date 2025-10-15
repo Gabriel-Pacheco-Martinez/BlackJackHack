@@ -1,7 +1,21 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { crx } from '@crxjs/vite-plugin'
+import manifest from './public/manifest.json'
 
-// https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    crx({ manifest })
+  ],
+  build: {
+    rollupOptions: {
+      input: {
+        popup: 'index.html'
+      }
+    }
+  },
+  server: {
+    port: 5173 // change to any number you like
+  }
 })
