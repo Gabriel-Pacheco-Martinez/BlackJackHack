@@ -39,29 +39,7 @@ function Popup() {
       });
       
       if (response.success) {
-        setLastResponse(response.data);
-        
-        // Update stats based on API response
-        // This is example logic - adjust based on your API response structure
-        const newStats = {
-          ...stats,
-          totalGames: stats.totalGames + 1,
-          totalWagered: stats.totalWagered + parseFloat(betSize)
-        };
-        
-        // Example: if API returns result field
-        if (response.data.result === 'win') {
-          newStats.wins += 1;
-          newStats.netProfit += parseFloat(betSize);
-        } else if (response.data.result === 'loss') {
-          newStats.losses += 1;
-          newStats.netProfit -= parseFloat(betSize);
-        } else if (response.data.result === 'push') {
-          newStats.pushes += 1;
-        }
-        
-        setStats(newStats);
-        await saveStats(newStats);
+        console.log("Background indicates message received successfully.")        
       } else {
         setError(response.error || 'Unknown error occurred');
       }
