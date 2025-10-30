@@ -1,18 +1,6 @@
 // Background service worker for Chrome extension
 const API_ENDPOINT = 'https://webhook.site/b0b9bec6-557d-4bfd-bd90-a05f0b6e47c3';
 
-// Listen for messages from popup
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === 'START_GAME') {
-    handleGameRequest(request.data)
-      .then(response => sendResponse({ success: true, data: response }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    
-    // Return true to indicate async response
-    return true;
-  }
-});
-
 // Make API call to backend
 async function handleGameRequest(gameData) {
   try {
@@ -39,15 +27,33 @@ async function handleGameRequest(gameData) {
       throw new Error(`API error: ${response.status} ${response.statusText}`);
     }
     
-    const data = await response.json();
-    console.log('API response:', data);
+    // Apply with real backend
+    // const data = await response.json();
+    // console.log('API response:', data);
+
     
-    return data;
+    // Instead of response.json(), just get text
+    const text = await response.text();
+    console.log('API response (text):', text);
+    
+    return text;
   } catch (error) {
     console.error('Background script error:', error);
     throw error;
   }
 }
+
+// Listen for messages from popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'START_GAME') {
+    handleGameRequest(request.data)
+      .then(response => sendResponse({ success: true, data: response }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    
+    // Return true to indicate async response
+    return true;
+  }
+});
 
 // Helper delay function
 function delay(ms) {
