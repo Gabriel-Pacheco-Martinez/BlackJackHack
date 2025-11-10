@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Blackjack Helper - Iteration 1",
+  "version": "0.1.0",
+  "description": "F010 - Settings Management (MD)",
+  "permissions": [
+    "storage"
+  ],
+  "background": {
+    "service_worker": "src/background/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "wizard.png",
+      "48": "wizard.png",
+      "128": "wizard.png"
+    }
+  },
+  "icons": {
+    "16": "wizard.png",
+    "48": "wizard.png",
+    "128": "wizard.png"
+  }
+}
