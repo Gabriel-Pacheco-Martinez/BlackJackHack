@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Blackjack Helper - Scrum 2",
+  "version": "0.2.0",
+  "description": "F004, F005, F010, F011, F012 - INCOMPLETE",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://webhook.site/*"
+  ],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "wizard.png",
+      "48": "wizard.png",
+      "128": "wizard.png"
+    }
+  },
+  "background": {
+    "service_worker": "service-worker-loader.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "resources": [
+        "strategy.json"
+      ],
+      "use_dynamic_url": false
+    }
+  ],
+  "icons": {
+    "16": "wizard.png",
+    "48": "wizard.png",
+    "128": "wizard.png"
+  }
+}
