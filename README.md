@@ -1,9 +1,9 @@
 <!-- PROJECT HEADER -->
 <h1 align="center">
   <p align="center">
-    <img src="images/ss1" alt="Screenshot 1" width="220" />
-    <img src="images/ss2" alt="Screenshot 2" width="220" />
-    <img src="images/ss3" alt="Screenshot 3" width="220" />
+    <img src="images/ss1.png" alt="Screenshot 1" width="220" />
+    <img src="images/ss2.png" alt="Screenshot 2" width="220" />
+    <img src="images/ss3.png" alt="Screenshot 3" width="220" />
     <br>
     BLACKJACK BOT
   </p>
