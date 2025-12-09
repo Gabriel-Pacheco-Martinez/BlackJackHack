@@ -1,0 +1,61 @@
+{
+  "manifest_version": 3,
+  "name": "Blackjack Bot",
+  "version": "1.0.0",
+  "description": "Automated blackjack bot with basic strategy",
+  "permissions": [
+    "storage",
+    "webRequest",
+    "webNavigation",
+    "scripting",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "wizard.png",
+      "48": "wizard.png",
+      "128": "wizard.png"
+    }
+  },
+  "background": {
+    "service_worker": "service-worker-loader.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "assets/content.js-BoQLKwGV.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "resources": [
+        "strategy.json",
+        "src/interceptor.js",
+        "src/checker.js",
+        "src/bot.js",
+        "assets/content.js-BoQLKwGV.js"
+      ],
+      "use_dynamic_url": false
+    }
+  ],
+  "icons": {
+    "16": "wizard.png",
+    "48": "wizard.png",
+    "128": "wizard.png"
+  }
+}
