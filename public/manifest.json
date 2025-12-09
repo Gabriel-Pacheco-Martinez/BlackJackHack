@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Blackjack Helper - Iteration 4",
+  "version": "0.4.0",
+  "description": "Complete: F010, F006, F004, F007, F005, F008 (Statistics)",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://webhook.site/*"
+  ],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "wizard.png",
+      "48": "wizard.png",
+      "128": "wizard.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background/background.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["strategy.json"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "wizard.png",
+    "48": "wizard.png",
+    "128": "wizard.png"
+  }
+}
