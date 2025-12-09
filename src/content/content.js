@@ -1,313 +1,367 @@
-// Content script for game interception
-// Feature: F006 - Game Interception & DOM Manipulation
+/**
+ * @file content.js
+ * @description Content script - bridges extension and page context
+ */
+(function() {
+    const isIframe = window !== window.top;
+    console.log('[CONTENT] Starting injection in', isIframe ? 'IFRAME' : 'TOP FRAME');
+    console.log('[CONTENT] Current URL:', window.location.href);
 
-class BlackjackInterceptor {
-  constructor() {
-    this.gameState = {
-      playerHand: [],
-      dealerCard: '',
-      currentBet: 0,
-      balance: 0,
-      isPlaying: false
+    // Enable debug mode for the interceptor
+    document.documentElement.setAttribute('data-debug-mode', 'true');
+
+    // Inject interceptor script as early as possible
+    const script = document.createElement('script');
+    script.src = chrome.runtime.getURL('src/interceptor.js');
+    script.onload = function() {
+        console.log('[CONTENT] Interceptor injected successfully');
+        this.remove();
     };
-
-    this.selectors = {
-      // Common selectors for blackjack game elements
-      playerCards: '.player-cards, .player-hand, #player-cards',
-      dealerCards: '.dealer-cards, .dealer-hand, #dealer-cards',
-      hitButton: 'button[data-action="hit"], .hit-button, #hit',
-      standButton: 'button[data-action="stand"], .stand-button, #stand',
-      doubleButton: 'button[data-action="double"], .double-button, #double',
-      splitButton: 'button[data-action="split"], .split-button, #split',
-      dealButton: 'button[data-action="deal"], .deal-button, #deal',
-      betInput: 'input[type="number"].bet, #bet-amount',
-      balanceDisplay: '.balance, .player-balance, #balance'
+    script.onerror = function() {
+        console.error('[CONTENT] Failed to load interceptor!');
     };
+    (document.head || document.documentElement).appendChild(script);
 
-    this.init();
-  }
+    // Also inject the bot script
+    const botScript = document.createElement('script');
+    botScript.src = chrome.runtime.getURL('src/bot.js');
+    botScript.onload = function() {
+        console.log('[CONTENT] Bot script injected successfully');
+        this.remove();
+    };
+    (document.head || document.documentElement).appendChild(botScript);
+})();
 
-  init() {
-    console.log('Blackjack Interceptor initialized');
-    this.attachEventListeners();
-    this.observeGameChanges();
-    this.injectCustomStyles();
-  }
 
-  // Attach event listeners to game buttons
-  attachEventListeners() {
-    // Intercept hit button
-    this.interceptButton(this.selectors.hitButton, 'hit');
+// ═══════════════════════════════════════════════════════════════
+// STATE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════
 
-    // Intercept stand button
-    this.interceptButton(this.selectors.standButton, 'stand');
+const isIframe = window !== window.top;
 
-    // Intercept double button
-    this.interceptButton(this.selectors.doubleButton, 'double');
+let gameState = {
+    detected: false,
+    initialized: false,
+    gameData: null,
+    balance: null,
+    availableBets: [],
+    sessionActive: false
+};
 
-    // Intercept split button
-    this.interceptButton(this.selectors.splitButton, 'split');
+let hasGameService = false;
+let tabId = null;
 
-    // Intercept deal button
-    this.interceptButton(this.selectors.dealButton, 'deal');
-  }
 
-  // Generic button interceptor
-  interceptButton(selector, action) {
-    const buttons = document.querySelectorAll(selector);
-    buttons.forEach(button => {
-      // Clone and replace to remove existing listeners
-      const newButton = button.cloneNode(true);
-      button.parentNode.replaceChild(newButton, button);
+// ═══════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
 
-      // Add our interceptor
-      newButton.addEventListener('click', (e) => {
-        console.log(`Intercepted ${action} action`);
-        this.handleGameAction(action, e);
-      }, true);
+function safeSendMessage(message) {
+    return new Promise((resolve) => {
+        if (!chrome.runtime?.id) {
+            console.log('[CONTENT] Extension context lost');
+            resolve(null);
+            return;
+        }
+
+        chrome.runtime.sendMessage(message, (response) => {
+            if (chrome.runtime.lastError) {
+                console.log('[CONTENT] Message error:', chrome.runtime.lastError.message);
+                resolve(null);
+            } else {
+                resolve(response);
+            }
+        });
     });
-  }
+}
 
-  // Handle intercepted game actions
-  handleGameAction(action, event) {
-    // Capture current game state
-    this.captureGameState();
-
-    // Send to background for analysis
-    chrome.runtime.sendMessage({
-      type: 'GAME_ACTION',
-      action: action,
-      gameState: this.gameState,
-      timestamp: Date.now()
-    }, response => {
-      if (response && response.shouldProceed) {
-        console.log(`Proceeding with ${action}`);
-        // Allow the original action to proceed
-      } else if (response && response.suggestedAction) {
-        console.log(`Overriding with suggested action: ${response.suggestedAction}`);
-        event.preventDefault();
-        event.stopPropagation();
-        // Execute suggested action instead
-        this.executeAction(response.suggestedAction);
-      }
-    });
-  }
-
-  // Capture current game state from DOM
-  captureGameState() {
-    try {
-      // Capture player cards
-      const playerCardsElement = document.querySelector(this.selectors.playerCards);
-      if (playerCardsElement) {
-        this.gameState.playerHand = this.extractCards(playerCardsElement);
-      }
-
-      // Capture dealer card
-      const dealerCardsElement = document.querySelector(this.selectors.dealerCards);
-      if (dealerCardsElement) {
-        const dealerCards = this.extractCards(dealerCardsElement);
-        this.gameState.dealerCard = dealerCards[0] || '';
-      }
-
-      // Capture balance
-      const balanceElement = document.querySelector(this.selectors.balanceDisplay);
-      if (balanceElement) {
-        this.gameState.balance = parseFloat(balanceElement.textContent.replace(/[^0-9.-]/g, ''));
-      }
-
-      // Capture current bet
-      const betInput = document.querySelector(this.selectors.betInput);
-      if (betInput) {
-        this.gameState.currentBet = parseFloat(betInput.value) || 0;
-      }
-
-      console.log('Game state captured:', this.gameState);
-    } catch (error) {
-      console.error('Error capturing game state:', error);
+async function getTabId() {
+    const response = await safeSendMessage({ type: 'GET_TAB_ID' });
+    if (response && response.tabId) {
+        tabId = response.tabId;
+        console.log('[CONTENT] Tab ID:', tabId);
     }
-  }
+}
 
-  // Extract card values from DOM element
-  extractCards(element) {
-    const cards = [];
-    const cardElements = element.querySelectorAll('.card, [data-card]');
+let checkerInjected = false;
 
-    cardElements.forEach(card => {
-      const value = card.getAttribute('data-card') ||
-                   card.getAttribute('data-value') ||
-                   card.textContent.trim();
-      if (value) {
-        cards.push(this.normalizeCardValue(value));
-      }
-    });
+function checkForGameService() {
+    if (checkerInjected) return;
+    checkerInjected = true;
 
-    return cards;
-  }
+    const checkScript = document.createElement('script');
+    checkScript.src = chrome.runtime.getURL('src/checker.js');
+    checkScript.onload = function() {
+        this.remove();
+    };
+    (document.head || document.documentElement).appendChild(checkScript);
+}
 
-  // Normalize card values to consistent format
-  normalizeCardValue(value) {
-    // Convert face cards and normalize format
-    const normalized = value.toUpperCase().trim();
-    if (normalized === 'A' || normalized === '1' || normalized === '11') return 'A';
-    if (normalized === 'K' || normalized === '13') return 'K';
-    if (normalized === 'Q' || normalized === '12') return 'Q';
-    if (normalized === 'J' || normalized === '11') return 'J';
-    if (normalized === 'T' || normalized === '10') return '10';
-    return normalized;
-  }
 
-  // Execute an action programmatically
-  executeAction(action) {
-    let button;
-    switch(action.toLowerCase()) {
-      case 'hit':
-        button = document.querySelector(this.selectors.hitButton);
-        break;
-      case 'stand':
-        button = document.querySelector(this.selectors.standButton);
-        break;
-      case 'double':
-        button = document.querySelector(this.selectors.doubleButton);
-        break;
-      case 'split':
-        button = document.querySelector(this.selectors.splitButton);
-        break;
-      default:
-        console.warn('Unknown action:', action);
+// ═══════════════════════════════════════════════════════════════
+// MESSAGE HANDLERS
+// ═══════════════════════════════════════════════════════════════
+
+// Listen for messages from the interceptor (page context)
+window.addEventListener('message', function(event) {
+    if (event.source !== window) return;
+
+    const message = event.data;
+    if (!message || !message.type) return;
+
+    // Only process game messages if this frame has gameService
+    const gameMessages = ['GAME_DATA_CAPTURED', 'AVAILABLE_BETS_UPDATE', 'INIT_RESPONSE', 'BALANCE_UPDATE', 'BOT_LOG', 'BOT_STATS'];
+    if (!hasGameService && gameMessages.includes(message.type) && message.type !== 'HAS_GAME_SERVICE') {
         return;
     }
 
-    if (button && !button.disabled) {
-      console.log(`Executing action: ${action}`);
-      button.click();
-    } else {
-      console.warn(`Button for action ${action} not found or disabled`);
-    }
-  }
+    switch (message.type) {
+        case 'HAS_GAME_SERVICE':
+            if (!hasGameService) {
+                hasGameService = true;
+                console.log('[CONTENT] GameService detected in this frame!');
+            }
+            break;
 
-  // Observe DOM changes to detect game state updates
-  observeGameChanges() {
-    const observer = new MutationObserver((mutations) => {
-      // Check if game state has changed
-      for (const mutation of mutations) {
-        if (mutation.type === 'childList' || mutation.type === 'characterData') {
-          // Debounced game state capture
-          clearTimeout(this.captureTimeout);
-          this.captureTimeout = setTimeout(() => {
-            this.captureGameState();
-            this.sendStateUpdate();
-          }, 100);
-          break;
+        case 'GAME_DATA_CAPTURED':
+            console.log('[CONTENT] Game data captured:', message.data);
+            handleGameDetection(message.data);
+            if (message.availableBets) {
+                handleBetsDetection(message.availableBets);
+            }
+            break;
+
+        case 'AVAILABLE_BETS_UPDATE':
+            console.log('[CONTENT] Available bets:', message.availableBets);
+            handleBetsDetection(message.availableBets);
+            break;
+
+        case 'INIT_RESPONSE':
+            console.log('[CONTENT] Init response - index:', message.index, 'counter:', message.counter);
+            if (gameState.gameData) {
+                gameState.gameData.index = message.index;
+                gameState.gameData.counter = message.counter;
+            }
+            break;
+
+        case 'MGCKEY_UPDATE':
+            if (gameState.gameData) {
+                gameState.gameData.mgckey = message.mgckey;
+            }
+            break;
+
+        case 'BALANCE_UPDATE':
+            gameState.balance = message.balance;
+            safeSendMessage({
+                type: 'BALANCE_UPDATE',
+                data: { balance: message.balance, action: message.action }
+            });
+            break;
+
+        case 'BOT_LOG':
+            // Forward bot logs to background
+            safeSendMessage({
+                type: 'BOT_LOG',
+                message: message.message,
+                level: message.level,
+                timestamp: message.timestamp
+            });
+            break;
+
+        case 'BOT_STATS':
+            // Forward stats to background
+            safeSendMessage({
+                type: 'BOT_STATS',
+                stats: message.stats
+            });
+            break;
+    }
+});
+
+async function handleGameDetection(gameData) {
+    console.log('[CONTENT] Game detected:', gameData);
+    gameState.detected = true;
+    gameState.initialized = true;
+    gameState.gameData = gameData;
+    gameState.sessionActive = true;
+
+    // Notify background
+    await safeSendMessage({
+        type: 'GAME_DETECTED',
+        data: {
+            url: window.location.href,
+            origin: gameData.origin,
+            symbol: gameData.symbol,
+            mgckey: gameData.mgckey,
+            requestUrl: gameData.requestUrl,
+            index: gameData.index,
+            counter: gameData.counter,
+            timestamp: gameData.timestamp,
+            isIframe: isIframe
         }
-      }
     });
 
-    // Start observing the game container
-    const gameContainer = document.querySelector('.game-container, #game, .blackjack-table');
-    if (gameContainer) {
-      observer.observe(gameContainer, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ['data-card', 'data-value', 'class']
-      });
-      console.log('Observing game container for changes');
+    // Store in tab-specific storage
+    const currentTabId = tabId;
+    if (currentTabId) {
+        const tabDataKey = `gameData_${currentTabId}`;
+        await chrome.storage.local.set({
+            [tabDataKey]: {
+                detected: true,
+                initialized: true,
+                gameData: gameData,
+                timestamp: new Date().toISOString()
+            }
+        });
+        console.log('[CONTENT] Stored game data for tab:', currentTabId);
+    }
+}
+
+async function handleBetsDetection(availableBets) {
+    console.log('[CONTENT] Bets detected:', availableBets);
+    gameState.availableBets = availableBets;
+
+    await chrome.storage.local.set({ availableBets: availableBets });
+    await safeSendMessage({
+        type: 'BETS_UPDATE',
+        data: { availableBets: availableBets }
+    });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// BOT CONTROL
+// ═══════════════════════════════════════════════════════════════
+
+function startBot(settings) {
+    if (!gameState.gameData) {
+        console.log('[CONTENT] No game data in this frame, skipping');
+        return false;
+    }
+
+    if (!hasGameService) {
+        console.log('[CONTENT] No gameService in this frame, skipping');
+        return false;
+    }
+
+    console.log('[CONTENT] Starting bot with settings:', settings);
+    console.log('[CONTENT] Game data:', gameState.gameData);
+
+    // Store settings and game data in data attributes for the bot to read (CSP-safe)
+    document.documentElement.setAttribute('data-bot-settings', JSON.stringify(settings));
+    document.documentElement.setAttribute('data-game-data', JSON.stringify(gameState.gameData));
+    document.documentElement.setAttribute('data-bot-command', 'start');
+
+    // Dispatch a custom event that the bot script can listen for
+    window.postMessage({
+        type: 'BOT_COMMAND',
+        command: 'start',
+        settings: settings,
+        gameData: gameState.gameData
+    }, '*');
+
+    return true;
+}
+
+function stopBot() {
+    console.log('[CONTENT] Stopping bot');
+    document.documentElement.setAttribute('data-bot-command', 'stop');
+    window.postMessage({
+        type: 'BOT_COMMAND',
+        command: 'stop'
+    }, '*');
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// EXTENSION MESSAGE LISTENER
+// ═══════════════════════════════════════════════════════════════
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log('[CONTENT] Message from extension:', request.type);
+
+    switch (request.type) {
+        case 'GET_GAME_STATE':
+            sendResponse({
+                state: gameState,
+                url: window.location.href,
+                hasGameService: hasGameService
+            });
+            break;
+
+        case 'CHECK_GAME':
+            sendResponse({
+                detected: gameState.detected,
+                initialized: gameState.initialized,
+                hasGameService: hasGameService
+            });
+            break;
+
+        case 'START_BOT':
+            const started = startBot(request.settings);
+            sendResponse({ success: started, hasGameData: !!gameState.gameData });
+            break;
+
+        case 'STOP_BOT':
+            stopBot();
+            sendResponse({ success: true });
+            break;
+
+        case 'RESET_STATE':
+            gameState = {
+                detected: false,
+                initialized: false,
+                gameData: null,
+                balance: null,
+                availableBets: [],
+                sessionActive: false
+            };
+            sendResponse({ reset: true });
+            break;
+
+        default:
+            sendResponse({ error: 'Unknown request type' });
+    }
+
+    return true;
+});
+
+
+// ═══════════════════════════════════════════════════════════════
+// INITIALIZATION
+// ═══════════════════════════════════════════════════════════════
+
+console.log('[CONTENT] Initializing game data capture...');
+
+// Get tab ID
+getTabId();
+
+// Check for gameService
+checkForGameService();
+setTimeout(checkForGameService, 100);
+setTimeout(checkForGameService, 500);
+setTimeout(checkForGameService, 1500);
+
+// Periodic check
+let checkInterval = setInterval(() => {
+    if (!gameState.detected) {
+        if (!hasGameService) {
+            checkForGameService();
+        }
     } else {
-      console.warn('Game container not found, retrying in 2 seconds...');
-      setTimeout(() => this.observeGameChanges(), 2000);
+        clearInterval(checkInterval);
     }
-  }
+}, 2000);
 
-  // Send state update to background
-  sendStateUpdate() {
-    chrome.runtime.sendMessage({
-      type: 'GAME_STATE_UPDATE',
-      gameState: this.gameState,
-      timestamp: Date.now()
-    });
-  }
-
-  // Inject custom styles for visual feedback
-  injectCustomStyles() {
-    const style = document.createElement('style');
-    style.textContent = `
-      /* Visual indicator for intercepted elements */
-      .blackjack-intercepted {
-        position: relative;
-      }
-
-      .blackjack-intercepted::after {
-        content: '🎯';
-        position: absolute;
-        top: -10px;
-        right: -10px;
-        font-size: 12px;
-        z-index: 10000;
-      }
-
-      /* Highlight suggested actions */
-      .suggested-action {
-        box-shadow: 0 0 10px rgba(255, 215, 0, 0.8) !important;
-        animation: pulse 1s infinite;
-      }
-
-      @keyframes pulse {
-        0% { box-shadow: 0 0 10px rgba(255, 215, 0, 0.8); }
-        50% { box-shadow: 0 0 20px rgba(255, 215, 0, 1); }
-        100% { box-shadow: 0 0 10px rgba(255, 215, 0, 0.8); }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  // Highlight suggested action button
-  highlightSuggestedAction(action) {
-    // Remove previous highlights
-    document.querySelectorAll('.suggested-action').forEach(el => {
-      el.classList.remove('suggested-action');
-    });
-
-    // Add highlight to suggested button
-    let selector;
-    switch(action.toLowerCase()) {
-      case 'hit':
-        selector = this.selectors.hitButton;
-        break;
-      case 'stand':
-        selector = this.selectors.standButton;
-        break;
-      case 'double':
-        selector = this.selectors.doubleButton;
-        break;
-      case 'split':
-        selector = this.selectors.splitButton;
-        break;
+// Clean up on unload
+window.addEventListener('beforeunload', () => {
+    if (gameState.sessionActive) {
+        safeSendMessage({
+            type: 'SESSION_END',
+            data: {
+                gameData: gameState.gameData,
+                finalBalance: gameState.balance
+            }
+        });
     }
-
-    if (selector) {
-      const button = document.querySelector(selector);
-      if (button) {
-        button.classList.add('suggested-action');
-      }
-    }
-  }
-}
-
-// Initialize interceptor when page is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    new BlackjackInterceptor();
-  });
-} else {
-  new BlackjackInterceptor();
-}
-
-// Listen for messages from background
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'HIGHLIGHT_ACTION') {
-    const interceptor = window.blackjackInterceptor || new BlackjackInterceptor();
-    interceptor.highlightSuggestedAction(message.action);
-    sendResponse({ success: true });
-  }
 });

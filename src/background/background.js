@@ -1,180 +1,327 @@
-// Background service worker for Chrome Extension
-// Features: F010 - Settings Management
-//          F006 - Game Interception
+/**
+ * @file background.js
+ * @description Background service worker - handles messaging between popup/content/bot
+ */
 
-let currentSettings = {
-  betSize: 10,
-  targetWager: 100,
-  actionDelay: 500,
-  useDelays: true,
-  autoRefresh: false,
-  strategy: 'basic'
-};
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
 
-// Handle messages from popup
+/** @type {Map<number, Object>} Active games indexed by tab ID */
+const activeGames = new Map();
+
+/** @type {Object} Strategy rules from JSON */
+let strategyRules = {};
+
+/** @type {Array} Recent bot log entries */
+let botLogs = [];
+
+
+// ═══════════════════════════════════════════════════════════════
+// STRATEGY
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Load strategy from JSON file
+ * @returns {Promise<boolean>}
+ */
+async function loadStrategy() {
+    try {
+        const response = await fetch(chrome.runtime.getURL('strategy.json'));
+        strategyRules = await response.json();
+        console.log('[BG] Strategy loaded');
+        return true;
+    } catch (error) {
+        console.error('[BG] Strategy load failed:', error);
+        return false;
+    }
+}
+
+/**
+ * Analyze hand and return recommended action
+ * @param {string} playerHand - Player's hand value
+ * @param {string} dealerCard - Dealer's upcard
+ * @returns {Object} Analysis result
+ */
+function analyzeHand(playerHand, dealerCard) {
+    const dealerKey = dealerCard === 'A' || dealerCard === '11' || dealerCard === '1'
+        ? '1/11'
+        : dealerCard.toString();
+
+    if (strategyRules[dealerKey]?.[playerHand]) {
+        return {
+            success: true,
+            action: strategyRules[dealerKey][playerHand],
+            playerHand,
+            dealerCard
+        };
+    }
+
+    // Fallback for hands not in table
+    const playerValue = parseInt(playerHand);
+    if (!isNaN(playerValue)) {
+        if (playerValue <= 11) return { success: true, action: 'Hit' };
+        if (playerValue >= 17) return { success: true, action: 'Stand' };
+        return { success: true, action: 'Hit' };
+    }
+
+    return { success: true, action: 'Stand' };
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// MESSAGE HANDLER
+// ═══════════════════════════════════════════════════════════════
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('Background received message:', request.type);
+    console.log('[BG] Message:', request.type);
 
-  switch (request.type) {
-    case 'START_GAME':
-      handleGameStart(request, sendResponse);
-      return true; // Will respond asynchronously
+    switch (request.type) {
+        case 'GET_TAB_ID':
+            sendResponse(sender.tab ? { tabId: sender.tab.id } : { error: 'No tab ID' });
+            break;
 
-    case 'UPDATE_SETTINGS':
-      updateSettings(request.settings);
-      sendResponse({ success: true });
-      break;
+        case 'GAME_DETECTED':
+            if (sender.tab) {
+                const tabId = sender.tab.id;
+                activeGames.set(tabId, {
+                    detected: true,
+                    initialized: true,
+                    gameData: request.data,
+                    timestamp: new Date().toISOString()
+                });
+                console.log('[BG] Game detected on tab', tabId);
+                sendResponse({ success: true, tabId });
+            }
+            break;
 
-    case 'GAME_ACTION':
-      handleGameAction(request, sendResponse);
-      return true; // Will respond asynchronously
+        case 'SESSION_UPDATE':
+            if (sender.tab) {
+                const tabId = sender.tab.id;
+                const game = activeGames.get(tabId);
+                if (game?.gameData) {
+                    game.gameData.mgckey = request.data.mgckey;
+                }
+                sendResponse({ success: true });
+            }
+            break;
 
-    case 'GAME_STATE_UPDATE':
-      handleGameStateUpdate(request);
-      sendResponse({ success: true });
-      break;
+        case 'BETS_UPDATE':
+            if (sender.tab) {
+                const tabId = sender.tab.id;
+                const game = activeGames.get(tabId);
+                if (game) {
+                    game.availableBets = request.data.availableBets;
+                }
+                chrome.storage.local.set({ availableBets: request.data.availableBets });
+                sendResponse({ success: true });
+            }
+            break;
 
-    default:
-      sendResponse({
-        success: false,
-        error: 'Unknown message type'
-      });
-  }
+        case 'BALANCE_UPDATE':
+            if (sender.tab) {
+                const tabId = sender.tab.id;
+                const game = activeGames.get(tabId);
+                if (game) {
+                    game.balance = request.data.balance;
+                }
+                sendResponse({ success: true });
+            }
+            break;
+
+        case 'BOT_LOG':
+            botLogs.push({
+                message: request.message,
+                level: request.level,
+                timestamp: request.timestamp || new Date().toLocaleTimeString()
+            });
+            // Keep only last 100 entries
+            if (botLogs.length > 100) {
+                botLogs = botLogs.slice(-100);
+            }
+            sendResponse({ success: true });
+            break;
+
+        case 'BOT_STATS':
+            chrome.storage.local.set({ botStats: request.stats });
+            sendResponse({ success: true });
+            break;
+
+        case 'GET_BOT_LOGS':
+            sendResponse({ logs: botLogs });
+            break;
+
+        case 'SESSION_END':
+            if (sender.tab) {
+                const tabId = sender.tab.id;
+                activeGames.delete(tabId);
+                console.log('[BG] Session ended for tab', tabId);
+                sendResponse({ success: true });
+            }
+            break;
+
+        case 'START_GAME':
+            handleStartGame(request, sendResponse);
+            return true; // async response
+
+        case 'STOP_GAME':
+            handleStopGame(sendResponse);
+            return true;
+
+        case 'ANALYZE_HAND':
+            sendResponse(analyzeHand(request.data.playerHand, request.data.dealerCard));
+            break;
+
+        case 'LOAD_STRATEGY':
+            loadStrategy()
+                .then(success => sendResponse({ success }))
+                .catch(error => sendResponse({ success: false, error: error.message }));
+            return true;
+
+        case 'UPDATE_SETTINGS':
+            chrome.storage.local.set(request.data)
+                .then(() => sendResponse({ success: true }))
+                .catch(error => sendResponse({ success: false, error: error.message }));
+            return true;
+
+        case 'GET_STATUS':
+            const tabId = sender.tab?.id;
+            const game = tabId ? activeGames.get(tabId) : null;
+            sendResponse({
+                hasGameData: game !== null,
+                gameDetected: game?.detected ?? false,
+                gameInitialized: game?.initialized ?? false,
+                strategyLoaded: Object.keys(strategyRules).length > 0,
+                activeGamesCount: activeGames.size,
+                tabData: game || null,
+                tabId
+            });
+            break;
+
+        default:
+            sendResponse({ success: false, error: 'Unknown message type' });
+    }
 });
 
-// Handle game start request with settings
-async function handleGameStart(request, sendResponse) {
-  try {
-    // Extract settings from request
-    const settings = {
-      betSize: request.betSize,
-      targetWager: request.targetWager,
-      useDelays: request.useDelays,
-      actionDelay: request.actionDelay,
-      strategy: request.strategy,
-      autoRefresh: request.autoRefresh
-    };
-
-    // Save settings to storage
-    await chrome.storage.local.set({
-      currentSettings: settings,
-      betSize: settings.betSize.toString(),
-      targetWager: settings.targetWager.toString(),
-      actionDelay: settings.actionDelay.toString(),
-      strategy: settings.strategy
-    });
-
-    // Update current settings
-    currentSettings = settings;
-
-    console.log('Settings saved:', settings);
-
-    // Apply delays if enabled
-    if (settings.useDelays) {
-      const delay = settings.actionDelay + Math.random() * settings.actionDelay;
-      await new Promise(resolve => setTimeout(resolve, delay));
+/**
+ * Handle START_GAME message - forward to all frames in active tab
+ */
+async function handleStartGame(request, sendResponse) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tabs[0]) {
+        sendResponse({ success: false, error: 'No active tab' });
+        return;
     }
 
-    // Simulate successful initialization
-    sendResponse({
-      success: true,
-      message: 'Game settings configured successfully',
-      settings: settings,
-      timestamp: new Date().toISOString()
+    const tabId = tabs[0].id;
+
+    // Persist settings
+    chrome.storage.local.set({
+        betSize: request.data.betSize,
+        targetWager: request.data.targetWager,
+        actionDelay: request.data.actionDelay
     });
 
-  } catch (error) {
-    console.error('Error starting game:', error);
-    sendResponse({
-      success: false,
-      error: error.message
-    });
-  }
-}
+    // Send to all frames - the one with gameData will respond
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    console.log('[BG] Sending START_BOT to', frames.length, 'frames');
 
-// Update settings
-function updateSettings(settings) {
-  currentSettings = { ...currentSettings, ...settings };
-  chrome.storage.local.set({ currentSettings });
-  console.log('Settings updated:', currentSettings);
-}
-
-// Handle game action from content script (F006)
-async function handleGameAction(request, sendResponse) {
-  console.log('Game action intercepted:', request.action, request.gameState);
-
-  try {
-    // Basic strategy logic (simplified for demo)
-    const { playerHand, dealerCard } = request.gameState;
-    let shouldProceed = true;
-    let suggestedAction = null;
-
-    // Simple logic for demonstration
-    const handValue = calculateHandValue(playerHand);
-    if (handValue < 12 && request.action === 'stand') {
-      shouldProceed = false;
-      suggestedAction = 'hit';
-    } else if (handValue >= 17 && request.action === 'hit') {
-      shouldProceed = false;
-      suggestedAction = 'stand';
+    for (const frame of frames) {
+        try {
+            chrome.tabs.sendMessage(tabId, {
+                type: 'START_BOT',
+                settings: request.data
+            }, { frameId: frame.frameId }, (response) => {
+                if (chrome.runtime.lastError) {
+                    // Expected for frames without content script
+                } else if (response?.success) {
+                    console.log('[BG] Bot started in frame', frame.frameId);
+                }
+            });
+        } catch {
+            // Ignore
+        }
     }
 
-    sendResponse({
-      shouldProceed,
-      suggestedAction,
-      reason: suggestedAction ? `Better to ${suggestedAction} with hand value ${handValue}` : 'Action approved'
-    });
-
-  } catch (error) {
-    console.error('Error handling game action:', error);
-    sendResponse({
-      shouldProceed: true,
-      error: error.message
-    });
-  }
+    sendResponse({ success: true });
 }
 
-// Handle game state updates (F006)
-function handleGameStateUpdate(request) {
-  console.log('Game state updated:', request.gameState);
-  // Store latest game state
-  chrome.storage.local.set({
-    lastGameState: request.gameState,
-    lastUpdateTime: request.timestamp
-  });
+/**
+ * Handle STOP_GAME message
+ */
+async function handleStopGame(sendResponse) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tabs[0]) {
+        sendResponse({ success: false });
+        return;
+    }
+
+    const tabId = tabs[0].id;
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+
+    for (const frame of frames) {
+        try {
+            chrome.tabs.sendMessage(tabId, { type: 'STOP_BOT' }, { frameId: frame.frameId });
+        } catch {
+            // Ignore
+        }
+    }
+
+    sendResponse({ success: true });
 }
 
-// Calculate hand value (helper function)
-function calculateHandValue(hand) {
-  if (!hand || hand.length === 0) return 0;
 
-  let value = 0;
-  let aces = 0;
+// ═══════════════════════════════════════════════════════════════
+// TAB LIFECYCLE
+// ═══════════════════════════════════════════════════════════════
 
-  for (const card of hand) {
-    if (card === 'A') {
-      aces++;
-      value += 11;
-    } else if (['K', 'Q', 'J'].includes(card)) {
-      value += 10;
+// Cleanup on tab close
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+    console.log('[BG] Tab closed:', tabId);
+    activeGames.delete(tabId);
+
+    await chrome.storage.local.remove([
+        `gameData_${tabId}`,
+        `botStatus_${tabId}`,
+        `tabStats_${tabId}`,
+        `tabHasGame_${tabId}`
+    ]);
+});
+
+// Cleanup on navigation/refresh
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+    if (changeInfo.status !== 'loading') return;
+
+    console.log('[BG] Tab navigating:', tabId);
+    activeGames.delete(tabId);
+
+    const autoRefreshKey = `autoRefresh_${tabId}`;
+    const stored = await chrome.storage.local.get([autoRefreshKey]);
+
+    const keysToRemove = [`gameData_${tabId}`, `tabHasGame_${tabId}`];
+
+    if (!stored[autoRefreshKey]) {
+        keysToRemove.push('botStats', 'botRunning');
+        console.log('[BG] Clearing stats (not auto-refresh)');
     } else {
-      value += parseInt(card) || 0;
+        await chrome.storage.local.remove([autoRefreshKey]);
+        console.log('[BG] Preserving stats (auto-refresh)');
     }
-  }
 
-  // Adjust for aces
-  while (value > 21 && aces > 0) {
-    value -= 10;
-    aces--;
-  }
-
-  return value;
-}
-
-// Initialize on install
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('Blackjack Helper v0.1.1');
-  console.log('Features implemented:');
-  console.log('- F010: Settings configuration and persistence');
-  console.log('- F006: Game interception and DOM manipulation');
+    await chrome.storage.local.remove(keysToRemove);
 });
+
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+
+chrome.runtime.onInstalled.addListener(() => {
+    console.log('[BG] Extension installed');
+    loadStrategy();
+});
+
+// Load on startup
+loadStrategy();
+
+console.log('[BG] Background script loaded');
