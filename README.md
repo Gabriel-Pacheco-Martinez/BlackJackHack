@@ -10,7 +10,6 @@
 </h1>
 
 <p align="center">
-  A pipeline for customizing large language models (LLMs) based on context and user requirements.
   <br />
   <a href="#about">About</a>
   ·
